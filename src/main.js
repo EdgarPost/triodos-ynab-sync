@@ -267,21 +267,19 @@ const triodosLogin = async () => {
       });
 
       try {
-        const response = await ynab(`/budgets/${budget.id}/transactions`, {
+        await ynab(`/budgets/${budget.id}/transactions`, {
           method: 'post',
           body,
           headers: { 'Content-Type': 'application/json' },
         });
-
-        console.log('Done', response);
       } catch (e) {
         console.log(e);
       }
-
-      await writeConfig(config);
-
-      console.log('All done!');
     }
+
+    await writeConfig(config);
+
+    console.log('All done!');
   }
 
   await endSession();

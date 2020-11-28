@@ -43,10 +43,10 @@ export const triodosToJSON = triodos => {
   };
 };
 
-export const createLastImportDate = (date = new Date()) => {
+export const createLastImportDate = (date = new Date(), days = 3) => {
   return formatDate(
     sub(date, {
-      days: 3,
+      days,
     }),
     'yyyy-MM-dd'
   );
@@ -66,7 +66,7 @@ export const readConfig = async (file = configFilename) => {
   }
 
   if (!config.lastImportDate) {
-    config.lastImportDate = createLastImportDate();
+    config.lastImportDate = createLastImportDate(new Date(), 60);
   }
 
   return {

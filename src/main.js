@@ -5,7 +5,8 @@ import crypto from 'crypto';
 import IBAN from 'iban';
 import ProgressBar from 'progress';
 import formatDate from 'date-fns/format/index.js';
-import { triodosToJSON } from './utils.js';
+import isAfter from 'date-fns/isAfter/index.js';
+import { readConfig, toDate, triodosToJSON, writeConfig } from './utils.js';
 
 const ignoreIBANs = ['NL20TRIO2044151294'];
 
@@ -103,7 +104,7 @@ const triodosLogin = async () => {
       console.log(`PAGE: ${i}: ${msg.args()[i]}`);
   });
 
-  const downloadTransactions = async iban => {
+  const downloadTransactions = async (iban, lastImportDate) => {
     await page.goto('https://bankieren.triodos.nl/ib-seam/pages/home.seam');
 
     const formattedIban = IBAN.printFormat(iban);
@@ -127,35 +128,42 @@ const triodosLogin = async () => {
 
     const transactions = [];
 
+    const rows = Array.from(await page.$$('tbody.rf-dt-b tr'));
+
+    const rows2 = [];
+    for (const row of rows) {
+      const dateValue = await row.$eval('td', node => node.textContent.trim());
+      const date = toDate(dateValue);
+
+      if (isAfter(date, lastImportDate)) {
+        rows2.push(row);
+      }
+    }
+
     const bar = new ProgressBar(
-      'downloading transactions [:bar] :rate/bps :percent :etas',
+      'downloading transactions [:bar] :percent :etas',
       {
         complete: '=',
         incomplete: ' ',
         width: 30,
-        total: 50,
+        total: rows2.length,
       }
     );
 
-    const rows = Array.from(await page.$$('.detailItem a'));
-    // console.log('rows', rows);
+    for (const row of rows2) {
+      const link = await row.$('.detailItem a');
+      await link.click();
 
-    for (const row of rows) {
-      await row.click();
-      // console.log('row', row);
       const modal = await page.waitFor('.modalPanel .formView');
-      // console.log('modal', modal);
 
       const labels = await modal.$$eval('.labelItem', nodes =>
         nodes.map(node => node.textContent.trim())
       );
-      // console.log('labels', labels);
 
       const values = await modal.$$eval('.dataItem', nodes =>
         nodes.map(node => node.textContent.trim())
       );
 
-      // console.log('values', values);
       const transaction = labels.reduce((acc, label, index) => {
         return {
           ...acc,
@@ -177,66 +185,6 @@ const triodosLogin = async () => {
     }
 
     return transactions.map(triodosToJSON);
-
-    // const transactions = await page.evaluate(async bar => {
-    //   const rows = Array.from(document.querySelectorAll('.detailItem a'));
-
-    //   const transactions = [];
-
-    //   // console.log('rows', rows.length);
-
-    //   for (const row of rows) {
-    //     // console.log('row', row);
-    //     await row.click();
-
-    //     const waitForElement = async selector => {
-    //       const element = document.querySelector('.modalPanel .formView');
-
-    //       if (!element) {
-    //         return new Promise(resolve => {
-    //           setTimeout(() => {
-    //             resolve(waitForElement(selector));
-    //           }, 30);
-    //         });
-    //       }
-
-    //       return element;
-    //     };
-
-    //     const modal = await waitForElement('.modalPanel .formView');
-
-    //     const labels = Array.from(modal.querySelectorAll('.labelItem')).map(a =>
-    //       a.textContent.trim()
-    //     );
-
-    //     const values = Array.from(modal.querySelectorAll('.dataItem')).map(a =>
-    //       a.textContent.trim()
-    //     );
-
-    //     const transaction = labels.reduce((acc, label, index) => {
-    //       return {
-    //         ...acc,
-    //         [label]: values[index],
-    //       };
-    //     }, {});
-
-    //     transactions.push(transaction);
-
-    //     const closeButton = modal.querySelector('.butItemClose .btnItem');
-
-    //     if (closeButton) {
-    //       closeButton.click();
-    //     }
-
-    //     modal.parentElement.removeChild(modal);
-
-    //     bar.tick();
-    //   }
-
-    //   return transactions;
-    // }, bar);
-
-    // return transactions.map(triodosToJSON);
   };
 
   const waitForPageChange = () =>
@@ -263,6 +211,8 @@ const triodosLogin = async () => {
     endSession,
     waitForPageChange,
   } = await triodosLogin();
+
+  const config = await readConfig();
 
   await loginWithIdentifier(IDENTIFIER_ID);
   await waitForPageChange();
@@ -303,7 +253,10 @@ const triodosLogin = async () => {
         `---- Fetching transactions for ${account.name} from ${formattedIban}..`
       );
 
-      const transactions = await downloadTransactions(formattedIban);
+      const transactions = await downloadTransactions(
+        formattedIban,
+        config.lastImportDate
+      );
 
       const ynabTransactions = transactions.map(toYnabTransaction(account));
 
@@ -324,6 +277,8 @@ const triodosLogin = async () => {
       } catch (e) {
         console.log(e);
       }
+
+      await writeConfig(config);
 
       console.log('All done!');
     }

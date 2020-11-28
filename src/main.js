@@ -1,318 +1,333 @@
-import fs from 'fs';
-import path from 'path';
-import util from 'util';
 import readline from 'readline';
 import fetch from 'node-fetch';
 import puppeteer from 'puppeteer';
-import parse from 'csv-parse';
+import crypto from 'crypto';
 import IBAN from 'iban';
-import csvToJson from './csvToJson.js';
+import ProgressBar from 'progress';
+import formatDate from 'date-fns/format/index.js';
+import { triodosToJSON } from './utils.js';
 
-const __dirname = path.resolve();
-const readFile = util.promisify(fs.readFile);
-const writeFile = util.promisify(fs.writeFile);
-const readDir = util.promisify(fs.readdir);
-const unlink = util.promisify(fs.unlink);
-const parseCsv = util.promisify(parse);
+const ignoreIBANs = ['NL20TRIO2044151294'];
 
 const LOGIN_URL =
-	'https://bankieren.triodos.nl/ib-seam/login.seam?loginType=digipass&locale=nl_NL';
-const YNAB_ACCESS_TOKEN =
-	'6c6f51f234e9ab7e2206d8aab7964572aabd5e50ad6952b5c9b08b3f1667b426';
-const IDENTIFIER_ID = '61-1036532-9'; // Edgar
+  'https://bankieren.triodos.nl/ib-seam/login.seam?loginType=digipass&locale=nl_NL';
 
-const createYnabApi = accessToken => async path => {
-	const response = await fetch(
-		`https://api.youneedabudget.com/v1${path}?access_token=${accessToken}`
-	);
-	const { data } = await response.json();
+const { YNAB_ACCESS_TOKEN, IDENTIFIER_ID } = process.env;
 
-	return Object.values(data)[0];
+const createYnabApi = accessToken => async (path, options) => {
+  const response = await fetch(
+    `https://api.youneedabudget.com/v1${path}?access_token=${accessToken}`,
+    options
+  );
+
+  const { data, error } = await response.json();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data;
 };
-
-const wait = ms =>
-	new Promise(resolve => {
-		setTimeout(resolve, ms);
-	});
 
 const ynab = createYnabApi(YNAB_ACCESS_TOKEN);
 
 const ask = question =>
-	new Promise(resolve => {
-		const rl = readline.createInterface({
-			input: process.stdin,
-			output: process.stdout,
-		});
+  new Promise(resolve => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
 
-		rl.question(question, answer => {
-			resolve(answer);
-			rl.close();
-		});
-	});
+    rl.question(question, answer => {
+      resolve(answer);
+      rl.close();
+    });
+  });
 
-const createCamera = page => {
-	let step = -1;
+const generateImportId = transaction => {
+  const shasum = crypto.createHash('md5');
+  const prefix = 'v1';
+  shasum.update([prefix, ...Object.values(transaction)].join(''));
 
-	return () => {
-		step++;
-
-		return page.screenshot({ path: `step-${step}.png` });
-	};
+  return shasum.digest('hex');
 };
 
+const toYnabTransaction = account => transaction => ({
+  account_id: account.id,
+  date: formatDate(new Date(transaction.date), 'yyyy-MM-dd'),
+  payee_name: transaction.payee,
+  amount:
+    transaction.type === 'inflow' ? transaction.amount : -transaction.amount,
+  memo: transaction.description
+    ? transaction.description.substring(0, 200)
+    : null,
+  approved: false,
+  cleared: 'cleared', // cleared, uncleared, reconciled
+  import_id: generateImportId(transaction),
+});
+
 const triodosLogin = async () => {
-	const browser = await puppeteer.launch();
+  const browser = await puppeteer.launch();
 
-	const page = await browser.newPage();
-	page.setViewport({ width: 1024, height: 768 });
+  const page = await browser.newPage();
+  page.setViewport({ width: 1024, height: 768 });
 
-	page.once('load', () => console.log('Page loaded!'));
+  await page.goto(LOGIN_URL);
 
-	const makeSnapshot = createCamera(page);
+  const loginWithIdentifier = async id =>
+    page.evaluate(id => {
+      document.querySelectorAll('[name=frm_gebruikersnummer_radio]')[1].click();
+      document.querySelectorAll('.defInput')[1].value = id;
+      document.querySelector('button.btnArrowItem').click();
 
-	await page.goto(LOGIN_URL);
+      return Promise.resolve();
+    }, id);
 
-	const loginWithIdentifier = async id =>
-		page.evaluate(id => {
-			document.querySelectorAll('[name=frm_gebruikersnummer_radio]')[1].click();
-			document.querySelectorAll('.defInput')[1].value = id;
-			document.querySelector('button.btnArrowItem').click();
+  const enterAccessCode = async accessCode => {
+    await page.evaluate(accessCode => {
+      document.querySelector('.smallInput').value = accessCode;
 
-			return Promise.resolve();
-		}, id);
+      return Promise.resolve();
+    }, accessCode);
 
-	const enterAccessCode = async accessCode => {
-		await page.evaluate(accessCode => {
-			document.querySelector('.smallInput').value = accessCode;
+    return async () =>
+      await page.evaluate(() => {
+        document.querySelector('button.btnItem').click();
 
-			return Promise.resolve();
-		}, accessCode);
+        return Promise.resolve();
+      });
+  };
 
-		return async () =>
-			await page.evaluate(() => {
-				document.querySelector('button.btnItem').click();
+  page.on('console', msg => {
+    for (let i = 0; i < msg.args().length; ++i)
+      console.log(`PAGE: ${i}: ${msg.args()[i]}`);
+  });
 
-				return Promise.resolve();
-			});
-	};
+  const downloadTransactions = async iban => {
+    await page.goto('https://bankieren.triodos.nl/ib-seam/pages/home.seam');
 
-	const downloadTransactions = async iban => {
-		await page.goto(
-			'https://bankieren.triodos.nl/ib-seam/pages/accountinformation/download/download.seam'
-		);
-		await makeSnapshot();
+    const formattedIban = IBAN.printFormat(iban);
 
-		const formattedIban = IBAN.electronicFormat(iban);
+    console.log(`Starting download for ${formattedIban}..`);
 
-		console.log(`Starting download for ${formattedIban}..`);
+    await page.screenshot({ path: `step-0.png` });
 
-		await page._client.send('Page.setDownloadBehavior', {
-			behavior: 'allow',
-			downloadPath: './tmp',
-		});
+    await page.evaluate(async formattedIban => {
+      const link = Array.from(document.querySelectorAll('a')).filter(
+        a => a.textContent.trim() === formattedIban
+      )[0];
 
-		await page.evaluate(() => {
-			document.querySelectorAll('input[type=radio]')[1].click();
+      await link.click();
+    }, formattedIban);
 
-			return Promise.resolve();
-		});
+    await page.screenshot({ path: `step-1.png` });
+    await waitForPageChange();
 
-		await wait(1000); // @todo: change to waitFor ?
-		await makeSnapshot();
+    await page.screenshot({ path: `step-2.png` });
 
-		await page.evaluate(findIban => {
-			console.log(`Preparing CSV download for ${findIban}..`);
+    const transactions = [];
 
-			const dropdown = document.querySelectorAll('select')[0];
+    const bar = new ProgressBar(
+      'downloading transactions [:bar] :rate/bps :percent :etas',
+      {
+        complete: '=',
+        incomplete: ' ',
+        width: 30,
+        total: 50,
+      }
+    );
 
-			const index = Array.from(dropdown.querySelectorAll('option')).findIndex(
-				option => {
-					const formattedIban = option.textContent
-						.split('-')[0]
-						.replace(/[^a-z\d]/gi, '');
+    const rows = Array.from(await page.$$('.detailItem a'));
+    // console.log('rows', rows);
 
-					return formattedIban === findIban;
-				}
-			);
+    for (const row of rows) {
+      await row.click();
+      // console.log('row', row);
+      const modal = await page.waitFor('.modalPanel .formView');
+      // console.log('modal', modal);
 
-			document.querySelectorAll('select')[0].selectedIndex = index;
-			document.querySelectorAll('input[type=text]')[0].value = '01-01-2020';
-			document.querySelectorAll('input[type=text]')[1].value = '15-07-2020';
+      const labels = await modal.$$eval('.labelItem', nodes =>
+        nodes.map(node => node.textContent.trim())
+      );
+      // console.log('labels', labels);
 
-			document.querySelector('.linkBottomUnit .btnItem').click();
+      const values = await modal.$$eval('.dataItem', nodes =>
+        nodes.map(node => node.textContent.trim())
+      );
 
-			return Promise.resolve();
-		}, formattedIban);
+      // console.log('values', values);
+      const transaction = labels.reduce((acc, label, index) => {
+        return {
+          ...acc,
+          [label]: values[index],
+        };
+      }, {});
 
-		await makeSnapshot();
+      transactions.push(transaction);
 
-		console.log(`Waiting for download to be ready..`);
+      const closeButton = await page.$('.butItemClose .btnItem');
 
-		const waitForDownload = async () => {
-			await page.evaluate(() => {
-				document.querySelector('.lastUnit .btnItem').click();
+      if (closeButton) {
+        await closeButton.click();
+      }
 
-				return Promise.resolve();
-			});
+      await modal.evaluate(modal => modal.parentElement.removeChild(modal));
 
-			await makeSnapshot();
+      bar.tick();
+    }
 
-			const done = await page.evaluate(() => {
-				const status = document
-					.querySelector('.lastUnit .lookupList')
-					.querySelectorAll('tbody tr')[0]
-					.querySelectorAll('td')[3].textContent;
+    return transactions.map(triodosToJSON);
 
-				return Promise.resolve(status === 'Verwerkt');
-			});
+    // const transactions = await page.evaluate(async bar => {
+    //   const rows = Array.from(document.querySelectorAll('.detailItem a'));
 
-			if (done) {
-				console.log('Done!');
-				return done;
-			}
+    //   const transactions = [];
 
-			console.log('Try again in 1 second!');
+    //   // console.log('rows', rows.length);
 
-			await wait(1000);
+    //   for (const row of rows) {
+    //     // console.log('row', row);
+    //     await row.click();
 
-			return waitForDownload();
-		};
+    //     const waitForElement = async selector => {
+    //       const element = document.querySelector('.modalPanel .formView');
 
-		await waitForDownload();
+    //       if (!element) {
+    //         return new Promise(resolve => {
+    //           setTimeout(() => {
+    //             resolve(waitForElement(selector));
+    //           }, 30);
+    //         });
+    //       }
 
-		await makeSnapshot();
+    //       return element;
+    //     };
 
-		console.log(`Downloading CSV..`);
+    //     const modal = await waitForElement('.modalPanel .formView');
 
-		await page.evaluate(() => {
-			document
-				.querySelector('.lastUnit .lookupList')
-				.querySelector('tbody tr td a')
-				.click();
+    //     const labels = Array.from(modal.querySelectorAll('.labelItem')).map(a =>
+    //       a.textContent.trim()
+    //     );
 
-			return Promise.resolve();
-		});
+    //     const values = Array.from(modal.querySelectorAll('.dataItem')).map(a =>
+    //       a.textContent.trim()
+    //     );
 
-		console.log(`Download complete..`);
+    //     const transaction = labels.reduce((acc, label, index) => {
+    //       return {
+    //         ...acc,
+    //         [label]: values[index],
+    //       };
+    //     }, {});
 
-		const getDownloadedContents = async () => {
-			const downloadDir = path.resolve(__dirname, './tmp');
+    //     transactions.push(transaction);
 
-			// @todo clean tmp dir
-			console.log('Read dir', downloadDir);
-			const downloadedFiles = await readDir(downloadDir);
-			console.log('files:', downloadedFiles);
+    //     const closeButton = modal.querySelector('.butItemClose .btnItem');
 
-			const csvFile = downloadedFiles.find(file => file.endsWith('.csv'));
+    //     if (closeButton) {
+    //       closeButton.click();
+    //     }
 
-			if (!csvFile) {
-				await wait(100);
-				return getDownloadedContents();
-			}
+    //     modal.parentElement.removeChild(modal);
 
-			console.log('Found', csvFile);
-			const filePath = path.resolve(downloadDir, csvFile);
+    //     bar.tick();
+    //   }
 
-			console.log('Read file', filePath);
-			const contents = await readFile(filePath);
+    //   return transactions;
+    // }, bar);
 
-			console.log('Remove', filePath);
-			await unlink(filePath);
+    // return transactions.map(triodosToJSON);
+  };
 
-			return contents;
-		};
+  const waitForPageChange = () =>
+    new Promise(resolve => {
+      browser.on('targetchanged', resolve);
+    });
 
-		const contents = await getDownloadedContents();
+  const endSession = async () => browser.close();
 
-		const result = await parseCsv(contents);
-
-		return csvToJson(result);
-	};
-
-	const waitForPageChange = () =>
-		new Promise(resolve => {
-			browser.on('targetchanged', resolve);
-		});
-
-	const endSession = async () => browser.close();
-
-	return {
-		loginWithIdentifier,
-		enterAccessCode,
-		endSession,
-		downloadTransactions,
-		waitForPageChange,
-		makeSnapshot,
-	};
+  return {
+    loginWithIdentifier,
+    enterAccessCode,
+    endSession,
+    downloadTransactions,
+    waitForPageChange,
+  };
 };
 
 (async () => {
-	const {
-		loginWithIdentifier,
-		downloadTransactions,
-		enterAccessCode,
-		endSession,
-		waitForPageChange,
-		getAccounts,
-		getTransactions,
-		makeSnapshot,
-	} = await triodosLogin();
+  const {
+    loginWithIdentifier,
+    downloadTransactions,
+    enterAccessCode,
+    endSession,
+    waitForPageChange,
+  } = await triodosLogin();
 
-	let loggedIn = false;
+  await loginWithIdentifier(IDENTIFIER_ID);
+  await waitForPageChange();
 
-	console.log('Fetching budgets..');
-	const budgets = await ynab('/budgets');
+  console.log('Not logged in yet!');
+  const accessCode = await ask('Access code identifier: ');
 
-	for (const budget of budgets) {
-		console.log(`Fetching accounts for ${budget.name}..`);
+  const loginWithAccessCode = await enterAccessCode(accessCode);
 
-		const accounts = await ynab(`/budgets/${budget.id}/accounts`);
+  await loginWithAccessCode();
+  await waitForPageChange();
 
-		for (const account of accounts) {
-			if (
-				!account.note ||
-				!account.note.includes('TRIO') ||
-				!IBAN.isValid(account.note)
-			) {
-				// console.log(`Skipping ${account.name}, has no Triodos IBAN linked`);
-				continue;
-			}
+  console.log('Fetching budgets..');
+  const { budgets } = await ynab('/budgets');
 
-			const formattedIban = IBAN.electronicFormat(account.note);
-			const jsonFilePath = path.resolve(
-				__dirname,
-				'tmp',
-				`${formattedIban}.json`
-			);
+  for (const budget of budgets) {
+    console.log(`-- Fetching accounts for ${budget.name}..`);
 
-			console.log(
-				`Fetching transactions for ${account.name} from ${formattedIban}..`
-			);
+    const { accounts } = await ynab(`/budgets/${budget.id}/accounts`);
 
-			if (!loggedIn) {
-				await loginWithIdentifier(IDENTIFIER_ID);
-				await waitForPageChange();
-				// await makeSnapshot();
+    for (const account of accounts) {
+      if (
+        !account.note ||
+        !account.note.includes('TRIO') ||
+        !IBAN.isValid(account.note)
+      ) {
+        continue;
+      }
 
-				console.log('Not logged in yet!');
-				const accessCode = await ask('Access code identifier: ');
-				// await makeSnapshot();
+      const formattedIban = IBAN.electronicFormat(account.note);
 
-				const loginWithAccessCode = await enterAccessCode(accessCode);
-				// await makeSnapshot();
+      if (ignoreIBANs.includes(formattedIban)) {
+        console.log('---- Ignore IBAN ', formattedIban);
+        continue;
+      }
 
-				await loginWithAccessCode();
-				// console.log('login...');
-				await waitForPageChange();
-				// console.log('waiting...');
-				// await makeSnapshot();
-				loggedIn = true;
-			}
+      console.log(
+        `---- Fetching transactions for ${account.name} from ${formattedIban}..`
+      );
 
-			const transactions = await downloadTransactions(formattedIban);
-			await writeFile(jsonFilePath, JSON.stringify(transactions, null, 2));
-		}
-	}
+      const transactions = await downloadTransactions(formattedIban);
 
-	await endSession();
+      const ynabTransactions = transactions.map(toYnabTransaction(account));
+
+      console.log('---- Sending transactions to YNAB..');
+
+      const body = JSON.stringify({
+        transactions: ynabTransactions,
+      });
+
+      try {
+        const response = await ynab(`/budgets/${budget.id}/transactions`, {
+          method: 'post',
+          body,
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+        console.log('Done', response);
+      } catch (e) {
+        console.log(e);
+      }
+
+      console.log('All done!');
+    }
+  }
+
+  await endSession();
 })();

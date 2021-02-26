@@ -1,12 +1,18 @@
 import readline from 'readline';
-import fetch from 'node-fetch';
+import fetch, { RequestInit } from 'node-fetch';
 import puppeteer from 'puppeteer';
 import crypto from 'crypto';
 import IBAN from 'iban';
 import ProgressBar from 'progress';
 import formatDate from 'date-fns/format/index.js';
 import isAfter from 'date-fns/isAfter/index.js';
-import { readConfig, toDate, triodosToJSON, writeConfig } from './utils.js';
+import {
+  TriodosTransactionRaw,
+  readConfig,
+  toDate,
+  triodosToJSON,
+  writeConfig,
+} from './utils';
 
 const ignoreIBANs = ['NL20TRIO2044151294'];
 
@@ -15,7 +21,10 @@ const LOGIN_URL =
 
 const { YNAB_ACCESS_TOKEN, IDENTIFIER_ID } = process.env;
 
-const createYnabApi = accessToken => async (path, options) => {
+const createYnabApi = (accessToken: string) => async <ReturnType>(
+  path: string,
+  options: RequestInit | undefined = undefined
+): Promise<ReturnType> => {
   const response = await fetch(
     `https://api.youneedabudget.com/v1${path}?access_token=${accessToken}`,
     options
@@ -32,7 +41,7 @@ const createYnabApi = accessToken => async (path, options) => {
 
 const ynab = createYnabApi(YNAB_ACCESS_TOKEN);
 
-const ask = question =>
+const ask = (question: string): Promise<string> =>
   new Promise(resolve => {
     const rl = readline.createInterface({
       input: process.stdin,
@@ -45,7 +54,38 @@ const ask = question =>
     });
   });
 
-const generateImportId = transaction => {
+export type TriodosTransaction = {
+  date: Date;
+  payee: string;
+  type: 'inflow' | 'outflow';
+  amount: number | null;
+  description: string;
+  iban: string | null;
+};
+
+export type YNABTransaction = {
+  account_id: string;
+  date: string;
+  payee_name: string;
+  amount: number | null;
+  memo: string | null;
+  approved: boolean;
+  cleared: 'cleared' | 'uncleared' | 'reconciled';
+  import_id: string;
+};
+
+export type YNABAccount = {
+  id: string;
+  name: string;
+  note: string;
+};
+
+export type YNABBudget = {
+  id: string;
+  name: string;
+};
+
+const generateImportId = (transaction: TriodosTransaction) => {
   const shasum = crypto.createHash('md5');
   const prefix = 'v1';
   shasum.update([prefix, ...Object.values(transaction)].join(''));
@@ -53,7 +93,9 @@ const generateImportId = transaction => {
   return shasum.digest('hex');
 };
 
-const toYnabTransaction = account => transaction => ({
+const toYnabTransaction = (account: YNABAccount) => (
+  transaction: TriodosTransaction
+): YNABTransaction => ({
   account_id: account.id,
   date: formatDate(new Date(transaction.date), 'yyyy-MM-dd'),
   payee_name: transaction.payee,
@@ -75,25 +117,34 @@ const triodosLogin = async () => {
 
   await page.goto(LOGIN_URL);
 
-  const loginWithIdentifier = async id =>
-    page.evaluate(id => {
-      document.querySelectorAll('[name=frm_gebruikersnummer_radio]')[1].click();
+  const loginWithIdentifier = async (id: string) =>
+    page.evaluate((id: string) => {
+      document
+        .querySelectorAll('[name=frm_gebruikersnummer_radio]')[1]
+        .dispatchEvent(new Event('click'));
       document.querySelectorAll('.defInput')[1].value = id;
-      document.querySelector('button.btnArrowItem').click();
+
+      const loginButton = document.querySelector('button.btnArrowItem');
+
+      if (loginButton) {
+        loginButton.dispatchEvent(new Event('click'));
+      }
 
       return Promise.resolve();
     }, id);
 
-  const enterAccessCode = async accessCode => {
-    await page.evaluate(accessCode => {
-      document.querySelector('.smallInput').value = accessCode;
+  const enterAccessCode = async (accessCode: string) => {
+    await page.evaluate((accessCode: string) => {
+      document?.querySelector('.smallInput')?.value = accessCode;
 
       return Promise.resolve();
     }, accessCode);
 
     return async () =>
       await page.evaluate(() => {
-        document.querySelector('button.btnItem').click();
+        document
+          ?.querySelector('button.btnItem')
+          ?.dispatchEvent(new Event('click'));
 
         return Promise.resolve();
       });
@@ -104,7 +155,10 @@ const triodosLogin = async () => {
       console.log(`PAGE: ${i}: ${msg.args()[i]}`);
   });
 
-  const downloadTransactions = async (iban, lastImportDate) => {
+  const downloadTransactions = async (
+    iban: string,
+    lastImportDate: Date
+  ): Promise<TriodosTransaction[]> => {
     await page.goto('https://bankieren.triodos.nl/ib-seam/pages/home.seam');
 
     const formattedIban = IBAN.printFormat(iban);
@@ -113,9 +167,9 @@ const triodosLogin = async () => {
 
     await page.screenshot({ path: `step-0.png` });
 
-    await page.evaluate(async formattedIban => {
+    await page.evaluate(async (formattedIban: string) => {
       const link = Array.from(document.querySelectorAll('a')).filter(
-        a => a.textContent.trim() === formattedIban
+        a => a?.textContent?.trim() === formattedIban
       )[0];
 
       await link.click();
@@ -126,13 +180,15 @@ const triodosLogin = async () => {
 
     await page.screenshot({ path: `step-2.png` });
 
-    const transactions = [];
+    const transactions: TriodosTransactionRaw[] = [];
 
     const rows = Array.from(await page.$$('tbody.rf-dt-b tr'));
 
     const rows2 = [];
     for (const row of rows) {
-      const dateValue = await row.$eval('td', node => node.textContent.trim());
+      const dateValue = await row.$eval('td', (node: Element) =>
+        node?.textContent?.trim()
+      );
       const date = toDate(dateValue);
 
       if (isAfter(date, lastImportDate)) {
@@ -152,24 +208,27 @@ const triodosLogin = async () => {
 
     for (const row of rows2) {
       const link = await row.$('.detailItem a');
-      await link.click();
+      await link?.click();
 
       const modal = await page.waitFor('.modalPanel .formView');
 
-      const labels = await modal.$$eval('.labelItem', nodes =>
-        nodes.map(node => node.textContent.trim())
+      const labels = await modal.$$eval('.labelItem', (nodes: Element[]) =>
+        nodes.map((node: Element) => node?.textContent?.trim())
       );
 
-      const values = await modal.$$eval('.dataItem', nodes =>
-        nodes.map(node => node.textContent.trim())
+      const values = await modal.$$eval('.dataItem', (nodes: Element[]) =>
+        nodes.map((node: Element) => node?.textContent?.trim())
       );
 
-      const transaction = labels.reduce((acc, label, index) => {
-        return {
-          ...acc,
-          [label]: values[index],
-        };
-      }, {});
+      const transaction: TriodosTransactionRaw = labels.reduce(
+        (acc: Partial<TriodosTransactionRaw>, label: string, index: number) => {
+          return {
+            ...acc,
+            [label]: values[index],
+          };
+        },
+        {}
+      );
 
       transactions.push(transaction);
 
@@ -179,12 +238,14 @@ const triodosLogin = async () => {
         await closeButton.click();
       }
 
-      await modal.evaluate(modal => modal.parentElement.removeChild(modal));
+      await modal.evaluate((modal: Element) =>
+        modal?.parentElement?.removeChild(modal)
+      );
 
       bar.tick();
     }
 
-    return transactions.map(triodosToJSON);
+    return transactions.map(transaction => triodosToJSON(transaction));
   };
 
   const waitForPageChange = () =>
@@ -203,7 +264,7 @@ const triodosLogin = async () => {
   };
 };
 
-(async () => {
+const main = async () => {
   const {
     loginWithIdentifier,
     downloadTransactions,
@@ -215,9 +276,9 @@ const triodosLogin = async () => {
   const config = await readConfig();
 
   await loginWithIdentifier(IDENTIFIER_ID);
+  console.log('Not logged in yet!');
   await waitForPageChange();
 
-  console.log('Not logged in yet!');
   const accessCode = await ask('Access code identifier: ');
 
   const loginWithAccessCode = await enterAccessCode(accessCode);
@@ -226,12 +287,14 @@ const triodosLogin = async () => {
   await waitForPageChange();
 
   console.log('Fetching budgets..');
-  const { budgets } = await ynab('/budgets');
+  const { budgets } = await ynab<{ budgets: YNABBudget[] }>('/budgets');
 
   for (const budget of budgets) {
     console.log(`-- Fetching accounts for ${budget.name}..`);
 
-    const { accounts } = await ynab(`/budgets/${budget.id}/accounts`);
+    const { accounts } = await ynab<{ accounts: YNABAccount[] }>(
+      `/budgets/${budget.id}/accounts`
+    );
 
     for (const account of accounts) {
       if (
@@ -258,7 +321,10 @@ const triodosLogin = async () => {
         config.lastImportDate
       );
 
-      const ynabTransactions = transactions.map(toYnabTransaction(account));
+      const createYnabTransaction = toYnabTransaction(account);
+      const ynabTransactions = transactions.map(transaction =>
+        createYnabTransaction(transaction)
+      );
 
       console.log('---- Sending transactions to YNAB..');
 
@@ -283,4 +349,6 @@ const triodosLogin = async () => {
   }
 
   await endSession();
-})();
+};
+
+main();

@@ -1,36 +1,49 @@
-import IBAN from 'iban';
 import path from 'path';
 import fs from 'fs';
 import { promisify } from 'util';
+import IBAN from 'iban';
+import { TriodosTransaction } from './main';
 import formatDate from 'date-fns/format/index.js';
 import sub from 'date-fns/sub/index.js';
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 
-const toMoney = x => {
+const toMoney = (x: string): number | null => {
   if (!x) {
     return null;
   }
+
   return Math.abs(Number(x.replace(/[^0-9]/g, ''))) * 10;
 };
 
-export const toDate = date => {
+export const toDate = (date: string): Date => {
   const [d, m, y] = date.split('-');
   return new Date([y, m, d].join('-'));
 };
 
-export const triodosToJSON = triodos => {
-  const type = triodos['Bedrag bij'] ? 'inflow' : 'outflow';
-  const date = toDate(triodos.Transactiedatum);
-  const description = triodos.Omschrijving.split('\\')[0]
+export type TriodosTransactionRaw = {
+  ['Bedrag bij']: string;
+  ['Bedrag af']: string;
+  Transactiedatum: string;
+  Omschrijving: string;
+  Naam: string;
+  Tegenrekening: string;
+};
+
+export const triodosToJSON = (
+  transaction: TriodosTransactionRaw
+): TriodosTransaction => {
+  const type = transaction['Bedrag bij'] ? 'inflow' : 'outflow';
+  const date = toDate(transaction.Transactiedatum);
+  const description = transaction.Omschrijving.split('\\')[0]
     .trim()
     .substring(0, 100);
 
-  const payee = triodos.Naam || description;
-  const amount = toMoney(triodos['Bedrag bij'] || triodos['Bedrag af']);
-  const iban = IBAN.isValid(triodos.Tegenrekening)
-    ? IBAN.printFormat(triodos.Tegenrekening)
+  const payee = transaction.Naam || description;
+  const amount = toMoney(transaction['Bedrag bij'] || transaction['Bedrag af']);
+  const iban = IBAN.isValid(transaction.Tegenrekening)
+    ? IBAN.printFormat(transaction.Tegenrekening)
     : null;
 
   return {
@@ -55,12 +68,18 @@ export const createLastImportDate = (date = new Date(), days = 3) => {
 const configFilename = path.resolve(process.cwd(), '.sync-config');
 const defaultConfig = {};
 
-export const readConfig = async (file = configFilename) => {
+export type TriodosYNABConfig = {
+  lastImportDate: Date;
+};
+
+export const readConfig = async (
+  file = configFilename
+): Promise<TriodosYNABConfig> => {
   let config;
 
   try {
     const contents = await readFile(file);
-    config = JSON.parse(contents);
+    config = JSON.parse(contents.toString());
   } catch (e) {
     config = defaultConfig;
   }
@@ -75,8 +94,11 @@ export const readConfig = async (file = configFilename) => {
   };
 };
 
-export const writeConfig = async (config, file = configFilename) => {
-  return writeFile(
+export const writeConfig = async (
+  config: TriodosYNABConfig,
+  file = configFilename
+) =>
+  writeFile(
     file,
     JSON.stringify(
       {
@@ -87,4 +109,3 @@ export const writeConfig = async (config, file = configFilename) => {
       2
     )
   );
-};

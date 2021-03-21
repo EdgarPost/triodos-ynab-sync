@@ -125,9 +125,9 @@ const triodosLogin = async () => {
 
   const loginWithIdentifier = async (id: string) =>
     page.evaluate((id: string) => {
-      document
-        .querySelectorAll('[name=frm_gebruikersnummer_radio]')[1]
-        .dispatchEvent(new Event('click'));
+      (document.querySelectorAll(
+        '[name=frm_gebruikersnummer_radio]'
+      )[1] as HTMLInputElement).click();
 
       const input = document.querySelectorAll(
         '.defInput'
@@ -135,10 +135,12 @@ const triodosLogin = async () => {
 
       input.value = id;
 
-      const loginButton = document.querySelector('button.btnArrowItem');
+      const loginButton = document.querySelector(
+        'button.btnArrowItem'
+      ) as HTMLButtonElement;
 
       if (loginButton) {
-        loginButton.dispatchEvent(new Event('click'));
+        loginButton.click();
       }
 
       return Promise.resolve();
@@ -155,9 +157,9 @@ const triodosLogin = async () => {
 
     return async () =>
       await page.evaluate(() => {
-        document
-          ?.querySelector('button.btnItem')
-          ?.dispatchEvent(new Event('click'));
+        (document?.querySelector(
+          'button.btnItem'
+        ) as HTMLButtonElement)?.click();
 
         return Promise.resolve();
       });

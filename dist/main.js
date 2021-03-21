@@ -60,14 +60,12 @@ const triodosLogin = async () => {
     await page.goto(LOGIN_URL);
     page.screenshot({ path: './login.png' });
     const loginWithIdentifier = async (id) => page.evaluate((id) => {
-        document
-            .querySelectorAll('[name=frm_gebruikersnummer_radio]')[1]
-            .dispatchEvent(new Event('click'));
+        document.querySelectorAll('[name=frm_gebruikersnummer_radio]')[1].click();
         const input = document.querySelectorAll('.defInput')[1];
         input.value = id;
         const loginButton = document.querySelector('button.btnArrowItem');
         if (loginButton) {
-            loginButton.dispatchEvent(new Event('click'));
+            loginButton.click();
         }
         return Promise.resolve();
     }, id);
@@ -79,7 +77,7 @@ const triodosLogin = async () => {
         }, accessCode);
         return async () => await page.evaluate(() => {
             var _a;
-            (_a = document === null || document === void 0 ? void 0 : document.querySelector('button.btnItem')) === null || _a === void 0 ? void 0 : _a.dispatchEvent(new Event('click'));
+            (_a = document === null || document === void 0 ? void 0 : document.querySelector('button.btnItem')) === null || _a === void 0 ? void 0 : _a.click();
             return Promise.resolve();
         });
     };
@@ -155,7 +153,6 @@ const main = async () => {
     await loginWithIdentifier(IDENTIFIER_ID);
     console.log('Not logged in yet!');
     await waitForPageChange();
-    console.log('Not logged in yet!');
     const accessCode = await ask('Access code identifier: ');
     const loginWithAccessCode = await enterAccessCode(accessCode);
     await loginWithAccessCode();

@@ -56,12 +56,15 @@ const triodosLogin = async () => {
     const browser = await puppeteer_1.default.launch();
     const page = await browser.newPage();
     page.setViewport({ width: 1024, height: 768 });
+    page.screenshot({ path: './page.png' });
     await page.goto(LOGIN_URL);
+    page.screenshot({ path: './login.png' });
     const loginWithIdentifier = async (id) => page.evaluate((id) => {
         document
             .querySelectorAll('[name=frm_gebruikersnummer_radio]')[1]
             .dispatchEvent(new Event('click'));
-        document.querySelectorAll('.defInput')[1].value = id;
+        const input = document.querySelectorAll('.defInput')[1];
+        input.value = id;
         const loginButton = document.querySelector('button.btnArrowItem');
         if (loginButton) {
             loginButton.dispatchEvent(new Event('click'));
@@ -70,8 +73,8 @@ const triodosLogin = async () => {
     }, id);
     const enterAccessCode = async (accessCode) => {
         await page.evaluate((accessCode) => {
-            var _a;
-            (_a = document === null || document === void 0 ? void 0 : document.querySelector('.smallInput')) === null || _a === void 0 ? void 0 : _a.value = accessCode;
+            const element = document.querySelector('.smallInput');
+            element.value = accessCode;
             return Promise.resolve();
         }, accessCode);
         return async () => await page.evaluate(() => {
@@ -100,7 +103,7 @@ const triodosLogin = async () => {
         const rows = Array.from(await page.$$('tbody.rf-dt-b tr'));
         const rows2 = [];
         for (const row of rows) {
-            const dateValue = await row.$eval('td', (node) => { var _a; return (_a = node === null || node === void 0 ? void 0 : node.textContent) === null || _a === void 0 ? void 0 : _a.trim(); });
+            const dateValue = (await row.$eval('td', (node) => { var _a; return (_a = node === null || node === void 0 ? void 0 : node.textContent) === null || _a === void 0 ? void 0 : _a.trim(); }));
             const date = utils_1.toDate(dateValue);
             if (index_js_2.default(date, lastImportDate)) {
                 rows2.push(row);
@@ -116,8 +119,8 @@ const triodosLogin = async () => {
             const link = await row.$('.detailItem a');
             await (link === null || link === void 0 ? void 0 : link.click());
             const modal = await page.waitFor('.modalPanel .formView');
-            const labels = await modal.$$eval('.labelItem', (nodes) => nodes.map((node) => { var _a; return (_a = node === null || node === void 0 ? void 0 : node.textContent) === null || _a === void 0 ? void 0 : _a.trim(); }));
-            const values = await modal.$$eval('.dataItem', (nodes) => nodes.map((node) => { var _a; return (_a = node === null || node === void 0 ? void 0 : node.textContent) === null || _a === void 0 ? void 0 : _a.trim(); }));
+            const labels = (await modal.$$eval('.labelItem', (nodes) => nodes.map((node) => { var _a; return (_a = node === null || node === void 0 ? void 0 : node.textContent) === null || _a === void 0 ? void 0 : _a.trim(); })));
+            const values = (await modal.$$eval('.dataItem', (nodes) => nodes.map((node) => { var _a; return (_a = node === null || node === void 0 ? void 0 : node.textContent) === null || _a === void 0 ? void 0 : _a.trim(); })));
             const transaction = labels.reduce((acc, label, index) => {
                 return {
                     ...acc,
@@ -152,6 +155,7 @@ const main = async () => {
     await loginWithIdentifier(IDENTIFIER_ID);
     console.log('Not logged in yet!');
     await waitForPageChange();
+    console.log('Not logged in yet!');
     const accessCode = await ask('Access code identifier: ');
     const loginWithAccessCode = await enterAccessCode(accessCode);
     await loginWithAccessCode();
@@ -196,4 +200,6 @@ const main = async () => {
     }
     await endSession();
 };
-main();
+(async () => {
+    await main();
+})();

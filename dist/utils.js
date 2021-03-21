@@ -14,7 +14,7 @@ const readFile = util_1.promisify(fs_1.default.readFile);
 const writeFile = util_1.promisify(fs_1.default.writeFile);
 const toMoney = (x) => {
     if (!x) {
-        return null;
+        return 0;
     }
     return Math.abs(Number(x.replace(/[^0-9]/g, ''))) * 10;
 };

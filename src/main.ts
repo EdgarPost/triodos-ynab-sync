@@ -58,7 +58,7 @@ export type TriodosTransaction = {
   date: Date;
   payee: string;
   type: 'inflow' | 'outflow';
-  amount: number | null;
+  amount: number;
   description: string;
   iban: string | null;
 };
@@ -93,6 +93,8 @@ const generateImportId = (transaction: TriodosTransaction) => {
   return shasum.digest('hex');
 };
 
+type TriodosTransactionRawKey = keyof TriodosTransactionRaw;
+
 const toYnabTransaction = (account: YNABAccount) => (
   transaction: TriodosTransaction
 ): YNABTransaction => ({
@@ -115,14 +117,23 @@ const triodosLogin = async () => {
   const page = await browser.newPage();
   page.setViewport({ width: 1024, height: 768 });
 
+  page.screenshot({ path: './page.png' });
+
   await page.goto(LOGIN_URL);
+
+  page.screenshot({ path: './login.png' });
 
   const loginWithIdentifier = async (id: string) =>
     page.evaluate((id: string) => {
       document
         .querySelectorAll('[name=frm_gebruikersnummer_radio]')[1]
         .dispatchEvent(new Event('click'));
-      document.querySelectorAll('.defInput')[1].value = id;
+
+      const input = document.querySelectorAll(
+        '.defInput'
+      )[1] as HTMLInputElement;
+
+      input.value = id;
 
       const loginButton = document.querySelector('button.btnArrowItem');
 
@@ -135,7 +146,9 @@ const triodosLogin = async () => {
 
   const enterAccessCode = async (accessCode: string) => {
     await page.evaluate((accessCode: string) => {
-      document?.querySelector('.smallInput')?.value = accessCode;
+      const element = document.querySelector('.smallInput') as HTMLInputElement;
+
+      element.value = accessCode;
 
       return Promise.resolve();
     }, accessCode);
@@ -186,9 +199,10 @@ const triodosLogin = async () => {
 
     const rows2 = [];
     for (const row of rows) {
-      const dateValue = await row.$eval('td', (node: Element) =>
+      const dateValue = (await row.$eval('td', (node: Element) =>
         node?.textContent?.trim()
-      );
+      )) as string;
+
       const date = toDate(dateValue);
 
       if (isAfter(date, lastImportDate)) {
@@ -212,23 +226,20 @@ const triodosLogin = async () => {
 
       const modal = await page.waitFor('.modalPanel .formView');
 
-      const labels = await modal.$$eval('.labelItem', (nodes: Element[]) =>
+      const labels = (await modal.$$eval('.labelItem', (nodes: Element[]) =>
         nodes.map((node: Element) => node?.textContent?.trim())
-      );
+      )) as TriodosTransactionRawKey[];
 
-      const values = await modal.$$eval('.dataItem', (nodes: Element[]) =>
+      const values = (await modal.$$eval('.dataItem', (nodes: Element[]) =>
         nodes.map((node: Element) => node?.textContent?.trim())
-      );
+      )) as string[];
 
-      const transaction: TriodosTransactionRaw = labels.reduce(
-        (acc: Partial<TriodosTransactionRaw>, label: string, index: number) => {
-          return {
-            ...acc,
-            [label]: values[index],
-          };
-        },
-        {}
-      );
+      const transaction = labels.reduce((acc, label, index: number) => {
+        return {
+          ...acc,
+          [label]: values[index],
+        };
+      }, {}) as TriodosTransactionRaw;
 
       transactions.push(transaction);
 
@@ -351,4 +362,6 @@ const main = async () => {
   await endSession();
 };
 
-main();
+(async () => {
+  await main();
+})();

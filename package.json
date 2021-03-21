@@ -4,12 +4,15 @@
   "description": "",
   "main": "src/main.js",
   "scripts": {
+    "build": "tsc",
+    "start": "node -r dotenv/config dist/main.js",
     "dev": "node -r dotenv/config src/main.js"
   },
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@types/iban": "0.0.32",
+    "@types/progress": "^2.0.3",
     "@types/puppeteer": "^5.4.3",
     "eslint": "^7.11.0",
     "eslint-config-prettier": "^6.14.0",

@@ -9,9 +9,9 @@ import sub from 'date-fns/sub/index.js';
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 
-const toMoney = (x: string): number | null => {
+const toMoney = (x: string): number => {
   if (!x) {
-    return null;
+    return 0;
   }
 
   return Math.abs(Number(x.replace(/[^0-9]/g, ''))) * 10;

@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 import readline from 'readline';
 import fetch, { RequestInit } from 'node-fetch';
 import puppeteer from 'puppeteer';
@@ -20,6 +22,10 @@ const LOGIN_URL =
   'https://bankieren.triodos.nl/ib-seam/login.seam?loginType=digipass&locale=nl_NL';
 
 const { YNAB_ACCESS_TOKEN, IDENTIFIER_ID } = process.env;
+
+if (!IDENTIFIER_ID) {
+  throw new Error('No IDENTIFIER_ID found!');
+}
 
 const createYnabApi = (accessToken: string) => async <ReturnType>(
   path: string,
@@ -88,7 +94,17 @@ export type YNABBudget = {
 const generateImportId = (transaction: TriodosTransaction) => {
   const shasum = crypto.createHash('md5');
   const prefix = 'v1';
-  shasum.update([prefix, ...Object.values(transaction)].join(''));
+
+  shasum.update(
+    [
+      prefix,
+      transaction.payee,
+      transaction.type,
+      transaction.amount,
+      transaction.description,
+      transaction.iban,
+    ].join('')
+  );
 
   return shasum.digest('hex');
 };
@@ -365,5 +381,6 @@ const main = async () => {
 };
 
 (async () => {
+  console.log('start');
   await main();
 })();

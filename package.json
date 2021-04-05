@@ -4,9 +4,9 @@
   "description": "",
   "main": "src/main.js",
   "scripts": {
+    "dev": "ts-node-dev --respawn --clear --transpile-only src/main.ts",
     "build": "tsc",
-    "start": "node -r dotenv/config dist/main.js",
-    "dev": "ts-node-dev --respawn --clear --transpile-only src/main.ts"
+    "start": "node -r dotenv/config dist/main.js"
   },
   "author": "",
   "license": "ISC",

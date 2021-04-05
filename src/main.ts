@@ -16,7 +16,7 @@ import {
   writeConfig,
 } from './utils';
 
-const ignoreIBANs = ['NL20TRIO2044151294'];
+const ignoreIBANs = [];
 
 const LOGIN_URL =
   'https://bankieren.triodos.nl/ib-seam/login.seam?loginType=digipass&locale=nl_NL';

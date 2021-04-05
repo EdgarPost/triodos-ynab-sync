@@ -18,7 +18,7 @@ IDENTIFIER_ID=your_triodos_identifier_number
 
 * Go to your [YNAB developer settings](https://app.youneedabudget.com/settings/developer) and generate a new Personal Access Token. Copy this token and paste it the `.env` file.
 * Insert the number in the `.env` file that's on the back your physicial Triodos identifier.
-* To link an account in your budget, edit the account and enter the IBAN in the **"Account Notes"** field. For example: for your shared account in YNAB, enter the IBAN of yoyr shared account in Triodos, eg _NL-- TRIO ---- ---- --_.
+* To link an account in your budget, edit the account and enter the IBAN in the **"Account Notes"** field. For example: for your shared account in YNAB, enter the IBAN of your shared account in Triodos, eg _NL12 TRIO 3456 7890 00_.
 
 ## Usage
 
